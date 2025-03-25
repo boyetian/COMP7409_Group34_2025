@@ -94,18 +94,17 @@ def fetch_and_save_data(symbols, start_time, end_time, output_folder="data"):
 if __name__ == "__main__":
     symbols = [
         'BTCUSDT',  # 比特币与Tether交易对
-        'ETHUSDT',  # 以太坊与Tether交易对
-        'XRPUSDT',  # 瑞波币与Tether交易对
-        'BNBUSDT',  # Binance Coin与Tether交易对
-        'SOLUSDT',  # Solana与Tether交易对
-        'ADAUSDT',  # Cardano与Tether交易对
-        'DOGEUSDT',  # 狗狗币与Tether交易对
-        'TRXUSDT',  # TRON与Tether交易对
-        'LINKUSDT'  # Chainlink与Tether交易对
+        # 'ETHUSDT',  # 以太坊与Tether交易对
+        # 'XRPUSDT',  # 瑞波币与Tether交易对
+        # 'BNBUSDT',  # Binance Coin与Tether交易对
+        # 'SOLUSDT',  # Solana与Tether交易对
+        # 'ADAUSDT',  # Cardano与Tether交易对
+        # 'DOGEUSDT',  # 狗狗币与Tether交易对
+        # 'TRXUSDT',  # TRON与Tether交易对
+        # 'LINKUSDT'  # Chainlink与Tether交易对
     ]
 
     start_time = '2025-02-24 00:00:00'  # 设置开始时间
     end_time = '2025-03-24 00:00:00'  # 设置结束时间
 
     fetch_and_save_data(symbols, start_time, end_time)
-Ω
