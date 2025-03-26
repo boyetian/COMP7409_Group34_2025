@@ -1,0 +1,1 @@
+pip install streamlit streamlit-autorefresh python-binance  plotly pandas
