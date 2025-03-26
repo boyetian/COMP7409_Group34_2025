@@ -2,10 +2,11 @@ import requests
 import pandas as pd
 from datetime import datetime
 import os
-
+import pytz
+from dateutil.relativedelta import relativedelta
 
 def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 00:00:00',
-                       end_time='2025-03-24 00:00:00', limit=1000):
+                       end_time='2025-03-24 00:00:00', limit=1000, calculate = True):
     """
     获取 Binance 交易对的历史 K 线数据，支持选择开始和结束时间。
     参数:
@@ -29,45 +30,79 @@ def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 0
     11. Taker Buy Quote Volume: Taker（主动方）在该时间段买入的法定货币量。
     12. Ignore: 占位符，通常不使用，可忽略。
     """
-    url = "https://api.binance.com/api/v3/klines"
-    all_data = []  # 用于存储所有请求到的数据
-    start_time = int(datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S').timestamp() * 1000)
-    end_time = int(datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S').timestamp() * 1000)
+    # 设置东八区时区
+    # 处理时间参数
+    tz = pytz.timezone('Asia/Hong_Kong')
+    UTC_TZ = pytz.utc
 
-    while start_time < end_time:
+    # 处理end_time
+    if end_time is None:
+        end_time = datetime.now(tz)
+    else:
+        if isinstance(end_time, (int, float)):  # 处理时间戳
+            end_time = datetime.fromtimestamp(end_time/1000, tz=UTC_TZ).astimezone(tz)
+        elif isinstance(end_time, str):  # 处理字符串
+            end_time = datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S')
+            end_time = tz.localize(end_time)
+        else:  # 处理datetime对象
+            if end_time.tzinfo is None:
+                end_time = tz.localize(end_time)
+            else:
+                end_time = end_time.astimezone(tz)
+
+    # 处理start_time
+    if start_time is None:
+        start_time = end_time - relativedelta(months=3)
+    else:
+        if isinstance(start_time, (int, float)):  # 处理时间戳
+            start_time = datetime.fromtimestamp(start_time/1000, tz=UTC_TZ).astimezone(tz)
+        elif isinstance(start_time, str):  # 处理字符串
+            start_time = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+            start_time = tz.localize(start_time)
+        else:  # 处理datetime对象
+            if start_time.tzinfo is None:
+                start_time = tz.localize(start_time)
+            else:
+                start_time = start_time.astimezone(tz)
+
+    # 转换为UTC时间戳（毫秒）
+    start_timestamp = int(start_time.astimezone(pytz.utc).timestamp() * 1000)
+    end_timestamp = int(end_time.astimezone(pytz.utc).timestamp() * 1000)
+    url = "https://api.binance.com/api/v3/klines"
+    all_data = []
+    current_start = start_timestamp
+    while current_start < end_timestamp:
         params = {
             'symbol': symbol,
             'interval': interval,
-            'limit': limit,
-            'startTime': start_time
+            'startTime': current_start,
+            'endTime': end_timestamp,
+            'limit': limit
         }
         response = requests.get(url, params=params)
         data = response.json()
-        if not data:  # 如果返回的数据为空，表示数据获取完成
+        if not data:  # 数据已全部获取
             break
         all_data.extend(data)
-        # 更新 start_time 为当前请求数据的最后一条的 Close Time
-        start_time = data[-1][6]  # Close Time 是数据中的第7列（从0开始）
-
-    # 创建 DataFrame
+        # 更新下一个请求的起始时间（最后一条的Close Time + 1ms）
+        current_start = data[-1][6] + 1  # 避免重复
+    # 创建DataFrame并处理时间列
     columns = ['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time',
                'Quote Asset Volume', 'Number of Trades', 'Taker Buy Base Volume',
                'Taker Buy Quote Volume', 'Ignore']
     df = pd.DataFrame(all_data, columns=columns)
-
-    # 转换时间戳
-    df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms')
-    df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms')
-
-    # 将 'Close' 和 'Volume' 列转换为浮动数值类型，以便进行计算
-    df['Close'] = df['Close'].astype(float)
-    df['Volume'] = df['Volume'].astype(float)
-
-    # 计算每个时间戳前15分钟的VWAP，使用滚动窗口方法
-    window_size = 15
-    df['VWAP_15m'] = (df['Close'].rolling(window=window_size, min_periods=1)
-                      .apply(lambda x: (x * df.loc[x.index, 'Volume']).sum() / df.loc[x.index, 'Volume'].sum(),
-                             raw=False))
+    # 转换时间戳为东八区时间
+    df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(
+        'Asia/Hong_Kong')
+    df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(
+        'Asia/Hong_Kong')
+    # 数值类型转换
+    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume',
+                    'Quote Asset Volume', 'Taker Buy Base Volume', 'Taker Buy Quote Volume']
+    df[numeric_cols] = df[numeric_cols].astype(float)
+    if calculate:
+        # 计算15分钟VWAP
+        df['VWAP_15m'] = (df['Close'] * df['Volume']).rolling(15).sum() / df['Volume'].rolling(15).sum()
     return df
 
 
@@ -104,7 +139,7 @@ if __name__ == "__main__":
         # 'LINKUSDT'  # Chainlink与Tether交易对
     ]
 
-    start_time = '2025-02-24 00:00:00'  # 设置开始时间
-    end_time = '2025-03-24 00:00:00'  # 设置结束时间
+    start_time = None  # 设置开始时间 e.g.'2025-02-24 00:00:00'
+    end_time = None  # 设置结束时间
 
     fetch_and_save_data(symbols, start_time, end_time)
