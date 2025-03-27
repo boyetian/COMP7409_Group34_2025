@@ -137,7 +137,7 @@ def fetch_and_save_data(symbols, start_time, end_time, output_folder="data"):
         df_binance = get_binance_klines(symbol=symbol, start_time=start_time, end_time=end_time)
 
         # 输出数据的前几行，查看计算后的 VWAP 列
-        print(df_binance[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'VWAP_15m'，,'Target']].head())
+        print(df_binance[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'VWAP_15m','Target']].head())
 
         # 保存到本地csv文件，方便后期回测使用
         output_file = os.path.join(output_folder, f'{symbol}.csv')
