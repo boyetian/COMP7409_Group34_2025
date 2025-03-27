@@ -1,1 +1,6 @@
-pip install streamlit streamlit-autorefresh python-binance  plotly pandas pytz
+streamlit
+streamlit-autorefresh
+python-binance
+plotly
+pandas
+pytz
