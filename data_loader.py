@@ -103,6 +103,25 @@ def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 0
     if calculate:
         # 计算15分钟VWAP
         df['VWAP_15m'] = (df['Close'] * df['Volume']).rolling(15).sum() / df['Volume'].rolling(15).sum()
+
+        # 计算对数收益
+        df['Log Return'] = np.log(df['Close'].shift(-15) / df['Close'].shift(-1))
+
+        # 计算市场收益
+        if symbols:
+            market_returns = pd.DataFrame()
+            for sym in symbols:
+                if sym != symbol:
+                    market_df = get_binance_klines(symbol=sym, start_time=start_time, end_time=end_time, calculate=False)
+                    market_df['Log Return'] = np.log(market_df['Close'].shift(-15) / market_df['Close'].shift(-1))
+                    market_returns[sym] = market_df['Log Return']
+
+            # 计算平均市场收益
+            weighted_market_returns = market_returns.mean(axis=1)
+
+            # 计算目标特征
+            df['Target'] = df['Log Return'] - (weighted_market_returns * df['Log Return'].mean() / weighted_market_returns.mean())
+  
     return df
 
 
@@ -118,7 +137,7 @@ def fetch_and_save_data(symbols, start_time, end_time, output_folder="data"):
         df_binance = get_binance_klines(symbol=symbol, start_time=start_time, end_time=end_time)
 
         # 输出数据的前几行，查看计算后的 VWAP 列
-        print(df_binance[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'VWAP_15m']].head())
+        print(df_binance[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'VWAP_15m'，,'Target']].head())
 
         # 保存到本地csv文件，方便后期回测使用
         output_file = os.path.join(output_folder, f'{symbol}.csv')
