@@ -66,7 +66,7 @@ def main():
         ])
 
         selected_interval = st.selectbox("K-line Interval",
-                                         ["1m", "5m", "15m", "1h", "4h", "1d"], index=5)
+                                         ["1m", "5m", "15m", "1h", "4h", "1d"], index=4)
 
         current_hk_time = datetime.now(HK_TZ)
         col1, col2 = st.columns(2)
