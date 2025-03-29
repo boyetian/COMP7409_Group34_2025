@@ -47,8 +47,8 @@ def get_weighted_asset_feature(df, col):
 
 df = get_weighted_asset_feature(df, 'Close_now_15')
 
-####划分训练集与测试集(8：2)
-split_date = "2021-06-13 00:00:00" 
+####划分训练集与测试集
+split_date = "2021-06-13 00:00:00" # 按时间8：2划分
 df_train = df[df["datetime"] < split_date].reset_index(drop=True)
 df_test = df[df["datetime"] >= split_date].reset_index(drop=True)
 
