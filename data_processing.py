@@ -48,10 +48,10 @@ def get_weighted_asset_feature(df, col):
 df = get_weighted_asset_feature(df, 'Close_now_15')
 
 ####划分训练集与测试集
-# 训练集：2018-01-01 至 2021-01-12
-df_train = df[(df["datetime"] >= "2018-01-01") & (df["datetime"] < "2021-01-13")].reset_index(drop=True)
-#测试集：2021-01-13 至 2021-09-21
-df_test = df[(df["datetime"] >= "2021-01-13") & (df["datetime"] <= "2021-09-21")].reset_index(drop=True)
+split_date = "2021-06-13 00:00:00" 
+df_train = df[df["datetime"] < split_date].reset_index(drop=True)
+df_test = df[df["datetime"] >= split_date].reset_index(drop=True)
+
 
 ####释放内存
 import gc
