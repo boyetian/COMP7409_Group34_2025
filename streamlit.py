@@ -4,10 +4,79 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta, date
 from streamlit_autorefresh import st_autorefresh
 import requests
-from data_loader import get_binance_klines
 import pytz
-from sqlalchemy import create_engine
-from PIL import Image
+import pytz
+import requests
+import pandas as pd
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+
+def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 00:00:00',
+                       end_time='2025-03-24 00:00:00', limit=1000):
+    """
+    获取 Binance 交易对的历史 K 线数据，支持选择开始和结束时间。
+    参数:
+    - symbol: 交易对（例如 BTCUSDT）
+    - interval: 时间间隔（例如 '1m', '5m', '1h', '1d'）
+    - start_time: 开始时间（字符串，格式为 'YYYY-MM-DD HH:MM:SS' 或 datetime 对象）
+    - end_time: 结束时间（字符串，格式为 'YYYY-MM-DD HH:MM:SS' 或 datetime 对象）
+    - limit: 返回数据的数量限制（最多 1000）
+    """
+    tz = pytz.timezone('Asia/Hong_Kong')
+
+    # 统一处理时间输入
+    def parse_time(time_input, default_delta=None):
+        if time_input is None:
+            return datetime.now(tz) if default_delta is None else datetime.now(tz) - default_delta
+        if isinstance(time_input, (int, float)):
+            return datetime.fromtimestamp(time_input / 1000, tz=pytz.utc).astimezone(tz)
+        if isinstance(time_input, str):
+            time_input = datetime.strptime(time_input, '%Y-%m-%d %H:%M:%S')
+        if time_input.tzinfo is None:
+            return tz.localize(time_input)
+        return time_input.astimezone(tz)
+
+    end_time = parse_time(end_time)
+    start_time = parse_time(start_time, relativedelta(months=3))
+
+    # 转换为UTC时间戳（毫秒）
+    start_timestamp = int(start_time.astimezone(pytz.utc).timestamp() * 1000)
+    end_timestamp = int(end_time.astimezone(pytz.utc).timestamp() * 1000)
+
+    # 获取数据
+    url = "https://api.binance.com/api/v3/klines"
+    all_data = []
+    current_start = start_timestamp
+
+    while current_start < end_timestamp:
+        params = {
+            'symbol': symbol,
+            'interval': interval,
+            'startTime': current_start,
+            'endTime': end_timestamp,
+            'limit': limit
+        }
+        data = requests.get(url, params=params).json()
+        if not data:
+            break
+        all_data.extend(data)
+        current_start = data[-1][6] + 1  # 更新起始时间
+
+    # 创建DataFrame
+    columns = ['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time',
+               'Quote Asset Volume', 'Number of Trades', 'Taker Buy Base Volume',
+               'Taker Buy Quote Volume', 'Ignore']
+    df = pd.DataFrame(all_data, columns=columns)
+
+    # 处理时间和数值类型
+    df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Hong_Kong')
+    df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Hong_Kong')
+    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'Quote Asset Volume',
+                    'Taker Buy Base Volume', 'Taker Buy Quote Volume']
+    df[numeric_cols] = df[numeric_cols].astype(float)
+
+    return df[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time']]
 
 # ==== Timezone Settings ====
 HK_TZ = pytz.timezone('Asia/Hong_Kong')
@@ -71,11 +140,19 @@ def realtime_analytics():
                                          ["1m", "5m", "15m", "1h", "4h", "1d"], index=4)
 
         current_hk_time = datetime.now(HK_TZ)
+        today_date = current_hk_time.date()
+
         col1, col2 = st.columns(2)
         with col1:
-            start_date = st.date_input("Start Date", value=current_hk_time - timedelta(days=30))
+            start_date = st.date_input("Start Date",
+                                       value=current_hk_time - timedelta(days=60),
+                                       min_value=current_hk_time - timedelta(days=8*365),
+                                       max_value=today_date)
         with col2:
-            end_date = st.date_input("End Date", value=current_hk_time.date(), min_value=start_date)
+            end_date = st.date_input("End Date",
+                                     value=today_date,
+                                     min_value=current_hk_time - timedelta(days=8*365),
+                                     max_value=today_date)
 
         start_time = convert_date_to_timestamp(start_date)
         end_time = convert_date_to_timestamp(end_date, end_of_day=True)
@@ -86,9 +163,7 @@ def realtime_analytics():
         interval=selected_interval,
         start_time=start_time,
         end_time=end_time,
-        limit=1000,
-        display=True,
-        calculate=False
+        limit=1000
     )
 
     realtime_data = fetch_realtime_price(symbol=selected_symbol)
@@ -204,54 +279,200 @@ def realtime_analytics():
     st.caption("Data Source: Binance Public API.")
     st.caption("Chart refresh rate: Every 60 seconds.")
 
+
 def model_predictions():
-    """Model Predictions Page"""
-    st.title("🤖 AI Trading Model Analysis")
+    """Model Predictions Page with LightGBM and CatBoost Comparison"""
+    st.title("🤖 AI Trading Model Comparison")
 
-    col1, col2 = st.columns(2)
+    # 创建Asset_ID到名称的映射字典
+    asset_mapping = {
+        0: "Bitcoin Cash",
+        1: "Binance Coin",
+        2: "Bitcoin",
+        3: "Cardano",
+        4: "Dogecoin",
+        5: "EOS.IO",
+        6: "Ethereum",
+        7: "Ethereum Classic",
+        8: "IOTA",
+        9: "Litecoin",
+        10: "Maker",
+        11: "Monero",
+        12: "Stellar",
+        13: "TRON"
+    }
 
-    with col1:
-        st.subheader("BTC/USDT Forecast")
-        st.metric("24h Prediction", "$63,200", "+2.8%")
+    # 侧边栏控件
+    with st.sidebar:
+        st.header("Model Configuration")
 
-        # Prediction trend chart
-        fig = go.Figure(go.Scatter(
-            x=pd.date_range(end=datetime.now(), periods=24, freq='H'),
-            y=[62000 + i * 200 * (-1) ** i for i in range(24)],
-            mode='lines+markers',
-            name='Predicted Price'
-        ))
-        fig.update_layout(height=300, margin=dict(t=30, b=30))
+        # 选择加密货币
+        selected_id = st.selectbox(
+            "Select Cryptocurrency",
+            options=list(asset_mapping.keys()),
+            format_func=lambda x: f"{asset_mapping[x]} (ID: {x})",
+            index=2
+        )
+
+        # 选择数据间隔
+        interval = st.selectbox(
+            "Data Interval",
+            options=["1m", "5m", "15m", "1h"],
+            index=0
+        )
+
+        # 选择要显示的模型
+        selected_models = st.multiselect(
+            "Select Models to Compare",
+            options=["LightGBM", "CatBoost"],
+            default=["LightGBM", "CatBoost"]
+        )
+
+        st.markdown("---")
+        st.subheader("Time Range Selection")
+
+    # 读取数据函数
+    @st.cache_data
+    def load_data(asset_id, model_type):
+        file_path = f"model_data/{model_type}/Asset_ID_{asset_id}_{model_type}.csv.gz"
+        df = pd.read_csv(file_path, compression='gzip')
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        return df
+
+    # 加载数据
+    data = {}
+    if "LightGBM" in selected_models:
+        lgbm_df = load_data(selected_id, "LightGBM")
+        data["LightGBM"] = lgbm_df
+    if "CatBoost" in selected_models:
+        cat_df = load_data(selected_id, "CatBoost")
+        data["CatBoost"] = cat_df
+
+    # 获取时间范围
+    all_dfs = list(data.values())
+    full_df = pd.concat(all_dfs) if all_dfs else pd.DataFrame()
+
+    if not full_df.empty:
+        # 设置默认时间范围（开始时间后的1个月）
+        default_start = full_df['datetime'].min()
+        default_end = min(default_start + pd.DateOffset(months=1), full_df['datetime'].max())
+
+        # 在侧边栏添加日期选择器
+        with st.sidebar:
+            start_date = st.date_input(
+                "Start date",
+                value=default_start.date(),
+                min_value=full_df['datetime'].min().date(),
+                max_value=full_df['datetime'].max().date()
+            )
+
+            end_date = st.date_input(
+                "End date",
+                value=default_end.date(),
+                min_value=full_df['datetime'].min().date(),
+                max_value=full_df['datetime'].max().date()
+            )
+
+        # 转换日期为datetime
+        start_datetime = pd.to_datetime(start_date)
+        end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1)  # 包含结束日
+
+        # 处理每个模型的数据
+        processed_data = {}
+        for model_name, df in data.items():
+            # 筛选时间范围内的数据
+            temp_df = df[(df['datetime'] >= start_datetime) &
+                         (df['datetime'] <= end_datetime)].copy()
+
+            # 根据间隔重新采样数据
+            if interval != "1m":
+                interval_map = {
+                    "5m": "5T",
+                    "15m": "15T",
+                    "1h": "1H"
+                }
+                temp_df = temp_df.set_index('datetime').resample(interval_map[interval]).mean().reset_index()
+
+            processed_data[model_name] = temp_df
+
+        # --- 使用 Plotly Go 创建交互式图表 ---
+        fig = go.Figure()
+
+        # 添加实际目标曲线（只添加一次）
+        if processed_data:
+            first_df = list(processed_data.values())[0]
+            fig.add_trace(go.Scatter(
+                x=first_df['datetime'],
+                y=first_df['target'],
+                name='Actual Target',
+                line=dict(color='blue', width=2),
+                opacity=0.8
+            ))
+
+        # 为每个模型添加预测曲线
+        colors = {'LightGBM': 'red', 'CatBoost': 'green'}
+        for model_name, df in processed_data.items():
+            fig.add_trace(go.Scatter(
+                x=df['datetime'],
+                y=df['final_predictions'],
+                name=f'{model_name} Predictions',
+                line=dict(color=colors.get(model_name, 'gray'), width=1.5),
+                opacity=0.7
+            ))
+
+        # 更新图表布局
+        fig.update_layout(
+            title=f'{asset_mapping[selected_id]} (ID: {selected_id}) - Model Comparison | Interval: {interval}',
+            xaxis_title='Datetime',
+            yaxis_title='Value',
+            hovermode='x unified',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            height=600,
+            template='plotly_white'
+        )
+
+        # --- 在 Streamlit 中显示 ---
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        st.subheader("Market Sentiment")
-        st.metric("Sentiment Index", "78/100", "Bullish Trend")
+        # 添加模型性能指标比较
+        st.subheader("📈 Model Performance Comparison")
 
-        # Sentiment gauge
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=78,
-            domain={'x': [0, 1], 'y': [0, 1]},
-            gauge={
-                'axis': {'range': [0, 100]},
-                'bar': {'color': "darkblue"},
-                'steps': [
-                    {'range': [0, 50], 'color': "lightgray"},
-                    {'range': [50, 100], 'color': "gray"}
-                ],
-            }
-        ))
-        fig.update_layout(height=300, margin=dict(t=30, b=30))
-        st.plotly_chart(fig, use_container_width=True)
+        if len(processed_data) > 1:
+            metrics = {}
+            for model_name, df in processed_data.items():
+                # 计算一些简单的评估指标
+                error = df['target'] - df['final_predictions']
+                metrics[model_name] = {
+                    'MAE': round(abs(error).mean(), 6),
+                    'RMSE': round((error ** 2).mean() ** 0.5, 6),
+                    'Correlation': round(df['target'].corr(df['final_predictions']), 4)
+                }
 
-    st.markdown("---")
-    st.write("**Model Details**")
-    st.write("""
-        - LSTM neural network for price prediction
-        - Integrated social media sentiment analysis
-        - Hourly prediction updates
-    """)
+            # 显示指标表格
+            metrics_df = pd.DataFrame(metrics).T
+            st.dataframe(metrics_df.style.highlight_min(axis=0, color='lightgreen'))
+
+            # 添加数据统计摘要
+            st.subheader("📊 Data Summary")
+            cols = st.columns(3)
+            with cols[0]:
+                st.metric("Cryptocurrency", asset_mapping[selected_id])
+            with cols[1]:
+                st.metric("Time Range", f"{start_date} to {end_date}")
+            with cols[2]:
+                st.metric("Data Interval", interval)
+
+            # 显示原始数据（可选）
+            if st.checkbox("Show raw data"):
+                selected_model = st.radio("Select model to view", list(processed_data.keys()))
+                st.dataframe(processed_data[selected_model])
+
+            else:
+                st.warning("No data available for the selected models.")
+
+            # 运行页面
+            if __name__ == "__main__":
+                model_predictions()
 
 
 def crypto_news_reader():
@@ -298,7 +519,7 @@ def crypto_news_reader():
                 return
 
             # Display news items
-            st.subheader(f"Latest {filter_option.capitalize()} News ({len(data['results'])})")
+            st.subheader(f"Latest {filter_option.capitalize()} News ")
 
             for i, news_item in enumerate(data['results'][:items_per_page]):
                 with st.container():
