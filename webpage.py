@@ -8,7 +8,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-
+import os
 
 def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 00:00:00',
                        end_time='2025-03-24 00:00:00', limit=1000):
@@ -335,7 +335,11 @@ def model_predictions():
     # 读取数据函数
     @st.cache_data
     def load_data(asset_id, model_type):
-        file_path = f"model_data/{model_type}/Asset_ID_{asset_id}_{model_type}.csv.gz"
+        # 获取当前脚本所在的目录
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
+        
+        file_path = os.path.join(MODEL_DATA_DIR, f"{model_type}/Asset_ID_{asset_id}_{model_type}.csv.gz")
         df = pd.read_csv(file_path, compression='gzip')
         df['datetime'] = pd.to_datetime(df['datetime'])
         return df
