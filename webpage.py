@@ -58,11 +58,24 @@ def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time=None, end_tim
             'endTime': end_timestamp,
             'limit': limit
         }
-        data = requests.get(url, params=params).json()
+        response = requests.get(url, params=params)
+        data = response.json()
+
+        # 检查返回的数据格式
+        if not isinstance(data, list):
+            st.error(f"Unexpected data format: {data}")
+            break
+
         if not data:
             break
+
         all_data.extend(data)
-        current_start = data[-1][6] + 1  # 使用K线结束时间 +1ms 作为下一段起始
+
+        try:
+            current_start = data[-1][6] + 1  # 使用K线结束时间 +1ms 作为下一段起始
+        except (IndexError, KeyError) as e:
+            st.error(f"Error processing data: {e}, data: {data[-1] if data else 'Empty data'}")
+            break
 
     # 创建DataFrame
     columns = ['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time',
