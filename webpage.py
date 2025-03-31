@@ -6,6 +6,8 @@ import pytz
 import yfinance as yf
 import requests
 import pandas as pd
+import io
+from urllib.parse import urljoin
 
 # ==== Timezone Settings ====
 HK_TZ = pytz.timezone('Asia/Hong_Kong')
@@ -276,10 +278,8 @@ def model_predictions():
     """Model Predictions Page with LightGBM"""
     st.title("🤖 AI Trading Model Comparison")
     # 初始化路径（兼容本地和云端）
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
-
-    FEATURE_IMPORTANCE_DIR = os.path.join(MODEL_DATA_DIR, "Feature Importance Pictures")
+    # GitHub 原始数据路径
+    BASE_GITHUB_URL = "https://raw.githubusercontent.com/boyetian/COMP7409_Group34_2025/main/"
 
     # Add calculation mode selection
     calculation_mode = st.sidebar.radio(
@@ -369,7 +369,7 @@ def model_predictions():
             key="interval_selectbox"
         )
 
-    @st.cache_data
+    @st.cache_data(ttl=3600)  # 缓存1小时
     def load_data(asset_id, calculation_mode, selected_models=['LightGBM']):
         try:
             dfs = []
@@ -377,88 +377,85 @@ def model_predictions():
             for model in selected_models:
                 if calculation_mode == "Single Calculation":
                     asset_name = asset_mapping[asset_id]
-                    file_path = os.path.join(MODEL_DATA_DIR, "LightGBM", f"{asset_id}_{asset_name}.parquet")
-                    df = pd.read_parquet(file_path)
+                    # 构建 GitHub 文件 URL
+                    file_url = urljoin(
+                        BASE_GITHUB_URL,
+                        f"model_data/LightGBM/{asset_id}_{asset_name}.parquet"
+                    )
+
+                    # 下载文件
+                    response = requests.get(file_url)
+                    response.raise_for_status()  # 检查请求是否成功
+
+                    # 从内存中读取 parquet 文件
+                    df = pd.read_parquet(io.BytesIO(response.content))
                     df = df.rename(columns={
                         'actual_close': 'actual',
                         'predicted_close': 'predicted'
                     })
 
-                    # Ensure datetime column exists for single calculation
-                    if 'datetime' not in df.columns:
-                        # If timestamp exists, convert to datetime
-                        if 'timestamp' in df.columns:
-                            df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
-                        else:
-                            # If no timestamp, create datetime from index
-                            df = df.reset_index()
-                            if 'datetime' in df.columns:
-                                if not pd.api.types.is_datetime64_any_dtype(df['datetime']):
-                                    df['datetime'] = pd.to_datetime(df['datetime'])
-                            else:
-                                # If no datetime column at all, create a dummy one
-                                df['datetime'] = pd.date_range(start='2021-06-13', periods=len(df), freq='1min')
+                else:  # Mixed Calculation
+                    # 构建 GitHub 文件 URL
+                    file_url = urljoin(
+                        BASE_GITHUB_URL,
+                        f"model_data/mixed_Calculation/{model}/{asset_id}.parquet"
+                    )
 
-                    # Ensure we have the required columns
-                    required_cols = ['datetime', 'actual', 'predicted']
-                    missing_cols = [col for col in required_cols if col not in df.columns]
-                    if missing_cols:
-                        raise ValueError(f"Missing required columns: {missing_cols}")
+                    # 下载文件
+                    response = requests.get(file_url)
+                    response.raise_for_status()
 
-                    # Sort by datetime
-                    df = df.sort_values('datetime')
+                    # 从内存中读取 parquet 文件
+                    df = pd.read_parquet(io.BytesIO(response.content))
 
-                    # Handle potential duplicates
-                    df = df.drop_duplicates(subset=['datetime'], keep='last')
-
-                else:
-                    file_path = os.path.join(MODEL_DATA_DIR, "mixed_calculation", model, f"{asset_id}.parquet")
-                    df = pd.read_parquet(file_path)
-
-                    # Handle datetime conversion for mixed calculation data
-                    if 'datetime' in df.columns:
-                        if not pd.api.types.is_datetime64_any_dtype(df['datetime']):
-                            df['datetime'] = pd.to_datetime(df['datetime'])
-                    else:
-                        # If no datetime column, create one from timestamp
+                # 通用的数据处理逻辑 (保持原有代码)
+                if 'datetime' not in df.columns:
+                    if 'timestamp' in df.columns:
                         df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+                    else:
+                        df = df.reset_index()
+                        if 'datetime' in df.columns:
+                            if not pd.api.types.is_datetime64_any_dtype(df['datetime']):
+                                df['datetime'] = pd.to_datetime(df['datetime'])
+                        else:
+                            df['datetime'] = pd.date_range(start='2021-06-13', periods=len(df), freq='1min')
 
-                    # Ensure we have the required columns
-                    required_cols = ['datetime', 'actual', 'predicted']
-                    missing_cols = [col for col in required_cols if col not in df.columns]
-                    if missing_cols:
-                        raise ValueError(f"Missing required columns: {missing_cols}")
-
-                    # Sort by datetime
-                    df = df.sort_values('datetime')
-
-                    # Handle potential duplicates
-                    df = df.drop_duplicates(subset=['datetime'], keep='last')
-
+                df = df.sort_values('datetime').drop_duplicates(subset=['datetime'], keep='last')
                 df['model'] = model
                 dfs.append(df)
 
-            combined_df = pd.concat(dfs)
-            return combined_df[['datetime', 'actual', 'predicted', 'model']]
+            return pd.concat(dfs)[['datetime', 'actual', 'predicted', 'model']]
 
         except Exception as e:
-            st.error(f"Error loading data: {str(e)}")
+            st.error(f"数据加载失败: {str(e)}")
             return pd.DataFrame()
+    # 图片加载函数
+    def load_image_from_github(path):
+        try:
+            url = urljoin(BASE_GITHUB_URL, path.replace(" ", "%20"))  # 处理空格
+            response = requests.get(url)
+            response.raise_for_status()
+            return io.BytesIO(response.content)
+        except Exception as e:
+            st.error(f"图片加载失败: {str(e)}")
+            return None
 
+    # 加载数据
     df = load_data(selected_id, calculation_mode, selected_models)
 
     if df.empty:
         st.warning("No data available for the selected cryptocurrency.")
         return
 
-    st.markdown("---")
-    st.subheader("Time Range Selection")
+
 
     # Get actual data time range
     data_start = df['datetime'].min().to_pydatetime()
     data_end = df['datetime'].max().to_pydatetime()
 
+
     with st.sidebar:
+        st.subheader("Time Range Selection")
         start_date = st.date_input(
             "Start date",
             value=data_start.date(),
@@ -561,34 +558,31 @@ def model_predictions():
         st.subheader("🔍 Feature Importance")
 
         if calculation_mode == "Single Calculation":
-            feature_img_path = os.path.join(
-                FEATURE_IMPORTANCE_DIR,
-                f"{selected_id}_feature_importance.png"
-            )
-            if os.path.exists(feature_img_path):
+            img_path = f"model_data/Feature%20Importance%20Pictures/{selected_id}_feature_importance.png"
+            img_bytes = load_image_from_github(img_path)
+
+            if img_bytes:
                 with st.container(border=True):
-                    st.image(feature_img_path,
+                    st.image(img_bytes,
                              caption=f'{asset_mapping[selected_id]}',
                              use_container_width=True)
                     st.caption("Higher values indicate more important features")
             else:
-                st.error("Feature importance visualization not available")
-        else:
+                st.error("特征重要性可视化不可用")
+
+        else:  # Mixed Calculation
             for model in selected_models:
-                feature_img_path = os.path.join(
-                    MODEL_DATA_DIR,
-                    "mixed_calculation",
-                    "feature_importance",
-                    f"{model}.png"
-                )
-                if os.path.exists(feature_img_path):
+                img_path = f"model_data/mixed_Calculation/feature_importance/{model}.png"
+                img_bytes = load_image_from_github(img_path)
+
+                if img_bytes:
                     with st.container(border=True):
-                        st.image(feature_img_path,
+                        st.image(img_bytes,
                                  caption=f'{model} Feature Importance',
                                  use_container_width=True)
                         st.caption(f"{model} feature importance (applies to all assets)")
                 else:
-                    st.warning(f"No feature importance image found for {model}")
+                    st.warning(f"未找到 {model} 的特征重要性图片")
 
     st.subheader("📈 Model Performance Metrics")
     metrics_data = []
