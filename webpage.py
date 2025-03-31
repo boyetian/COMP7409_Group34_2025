@@ -279,41 +279,58 @@ def model_predictions():
     MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
     FEATURE_IMPORTANCE_DIR = os.path.join(MODEL_DATA_DIR, "Feature Importance Pictures")
 
-    # Asset_ID到名称的映射字典
-    asset_mapping = {
-        0: "Binance Coin",
-        1: "Bitcoin",
-        2: "Bitcoin Cash",
-        3: "Cardano",
-        4: "Dogecoin",
-        5: "EOS.IO",
-        6: "Ethereum",
-        7: "Ethereum Classic",
-        8: "IOTA",
-        9: "Litecoin",
-        10: "Maker",
-        11: "Monero",
-        12: "Stellar",
-        13: "TRON"
+    # Asset_ID到名称的映射字典 - 分组显示
+    asset_groups = {
+        "Good Predictors": {
+            2: "Bitcoin Cash",
+            5: "EOS.IO",
+            8: "IOTA",
+            9: "Litecoin",
+            11: "Monero",
+            12: "Stellar",
+            13: "TRON"
+        },
+        "Poor Predictors": {
+            0: "Binance Coin",
+            1: "Bitcoin",
+            3: "Cardano",
+            4: "Dogecoin",
+            6: "Ethereum",
+            7: "Ethereum Classic",
+            10: "Maker"
+        }
     }
+
+    # 创建完整的asset_mapping字典
+    asset_mapping = {**asset_groups["Good Predictors"], **asset_groups["Poor Predictors"]}
+
+
 
     # 侧边栏控件
     with st.sidebar:
         st.header("Model Configuration")
 
-        # 加密货币选择
+        # 加密货币选择 - 分组显示
+        selected_group = st.selectbox(
+            "Select Predictor Group",
+            options=list(asset_groups.keys()),
+            index=0,
+            key="group_selectbox"
+        )
+
+        # 根据选择的组显示对应的加密货币
         selected_id = st.selectbox(
             "Select Cryptocurrency",
-            options=list(asset_mapping.keys()),
-            format_func=lambda x: f"{asset_mapping[x]}",
-            index=1,  # 默认选择Bitcoin
+            options=list(asset_groups[selected_group].keys()),
+            format_func=lambda x: f"{asset_groups[selected_group][x]}",
+            index=0,
             key="crypto_selectbox"
         )
 
         # 数据间隔选择
         interval = st.selectbox(
             "Data Interval",
-            options=["1m", "5m", "15m", "1h", "1d"],
+            options=["1m", "5m", "15m", "1h"],
             index=0,
             key="interval_selectbox"
         )
@@ -414,6 +431,9 @@ def model_predictions():
         # 使用mean()聚合，保留两列
         filtered_df = filtered_df.set_index('datetime').resample(resample_rule).mean().reset_index()
 
+    # 在图表标题中添加预测质量标签
+    prediction_quality = "Good" if selected_id in asset_groups["Good Predictors"] else "Poor"
+
     col1, col2 = st.columns([3, 2])  # 3:2的宽度比例
 
     with col1:
@@ -437,9 +457,9 @@ def model_predictions():
             opacity=0.7
         ))
 
-        # 更新图表布局
+        # 更新图表布局 - 添加预测质量标签
         fig.update_layout(
-            title=f'{asset_mapping[selected_id]} Price Prediction | Interval: {interval}',
+            title=f'{asset_mapping[selected_id]} Price Prediction ({prediction_quality} Predictor) | Interval: {interval}',
             xaxis_title='Datetime',
             yaxis_title='Price (USD)',
             hovermode='x unified',
