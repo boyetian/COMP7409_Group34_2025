@@ -1,17 +1,14 @@
 import streamlit as st
-import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta, date
-from streamlit_autorefresh import st_autorefresh
+import os
+from datetime import datetime
 import pytz
+from dateutil.relativedelta import relativedelta
 import requests
 import pandas as pd
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
-import os
 
-def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 00:00:00',
-                       end_time='2025-03-24 00:00:00', limit=1000):
+def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time=None, end_time=None, limit=1000):
     """
     获取 Binance 交易对的历史 K 线数据，支持选择开始和结束时间。
     参数:
@@ -26,17 +23,23 @@ def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 0
     # 统一处理时间输入
     def parse_time(time_input, default_delta=None):
         if time_input is None:
+            # 如果没有提供时间且没有默认偏移，返回当前时间；否则返回当前时间减去偏移
             return datetime.now(tz) if default_delta is None else datetime.now(tz) - default_delta
         if isinstance(time_input, (int, float)):
+            # 如果是时间戳，转换为 datetime 并设置时区
             return datetime.fromtimestamp(time_input / 1000, tz=pytz.utc).astimezone(tz)
         if isinstance(time_input, str):
+            # 如果是字符串，解析为 datetime 对象
             time_input = datetime.strptime(time_input, '%Y-%m-%d %H:%M:%S')
         if time_input.tzinfo is None:
+            # 如果无时区信息，设置为香港时区
             return tz.localize(time_input)
+        # 如果已有时区，转换为香港时区
         return time_input.astimezone(tz)
 
+    # 解析时间：若未提供 end_time，默认为当前时间；若未提供 start_time，默认一个月前
     end_time = parse_time(end_time)
-    start_time = parse_time(start_time, relativedelta(months=3))
+    start_time = parse_time(start_time, relativedelta(months=1))  # 修改此处为1个月
 
     # 转换为UTC时间戳（毫秒）
     start_timestamp = int(start_time.astimezone(pytz.utc).timestamp() * 1000)
@@ -59,7 +62,7 @@ def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time='2025-01-24 0
         if not data:
             break
         all_data.extend(data)
-        current_start = data[-1][6] + 1  # 更新起始时间
+        current_start = data[-1][6] + 1  # 使用K线结束时间 +1ms 作为下一段起始
 
     # 创建DataFrame
     columns = ['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time',
@@ -124,7 +127,6 @@ def fetch_realtime_price(symbol='BTCUSDT'):
 # ==== Main Function ====
 def realtime_analytics():
     st.title("📈 Crypto Real-time Analytics Dashboard")
-    st_autorefresh(interval=60 * 1000, key="auto_refresh")
 
     # ==== Sidebar ====
     with st.sidebar:
@@ -279,14 +281,17 @@ def realtime_analytics():
 
 
 def model_predictions():
-    """Model Predictions Page with LightGBM and CatBoost Comparison"""
+    """Model Predictions Page with LightGBM"""
     st.title("🤖 AI Trading Model Comparison")
-    PREDICTION_MULTIPLIER = 10
-    # 创建Asset_ID到名称的映射字典
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
+    FEATURE_IMPORTANCE_DIR = os.path.join(MODEL_DATA_DIR, "Feature Importance Pictures")
+
+    # Asset_ID到名称的映射字典
     asset_mapping = {
-        0: "Bitcoin Cash",
-        1: "Binance Coin",
-        2: "Bitcoin",
+        0: "Binance Coin",
+        1: "Bitcoin",
+        2: "Bitcoin Cash",
         3: "Cardano",
         4: "Dogecoin",
         5: "EOS.IO",
@@ -304,184 +309,256 @@ def model_predictions():
     with st.sidebar:
         st.header("Model Configuration")
 
-        # 选择加密货币（添加唯一key）
+        # 加密货币选择
         selected_id = st.selectbox(
             "Select Cryptocurrency",
             options=list(asset_mapping.keys()),
-            format_func=lambda x: f"{asset_mapping[x]} (ID: {x})",
-            index=2,
-            key="crypto_selectbox"  # Unique key
+            format_func=lambda x: f"{asset_mapping[x]}",
+            index=1,  # 默认选择Bitcoin
+            key="crypto_selectbox"
         )
 
-        # 选择数据间隔（添加唯一key）
+        # 数据间隔选择
         interval = st.selectbox(
             "Data Interval",
-            options=["1m", "5m", "15m", "1h"],
+            options=["1m", "5m", "15m", "1h", "1d"],
             index=0,
-            key="interval_selectbox"  # Unique key
-        )
-
-        # 选择要显示的模型（添加唯一key）
-        selected_models = st.multiselect(
-            "Select Models to Compare",
-            options=["LightGBM", "CatBoost"],
-            default=["LightGBM", "CatBoost"],
-            key="model_multiselect"  # Unique key
+            key="interval_selectbox"
         )
 
         st.markdown("---")
         st.subheader("Time Range Selection")
 
-    # 读取数据函数
+    # 修改后的数据加载函数（修复时间序列生成）
     @st.cache_data
-    def load_data(asset_id, model_type):
-        # 获取当前脚本所在的目录
+    def load_data(asset_id):
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
-        
-        file_path = os.path.join(MODEL_DATA_DIR, f"{model_type}/Asset_ID_{asset_id}_{model_type}.csv.gz")
-        df = pd.read_csv(file_path, compression='gzip')
-        df['datetime'] = pd.to_datetime(df['datetime'])
-        return df
+
+        try:
+            # 加载Parquet文件
+            asset_name = asset_mapping[asset_id]
+            file_path = os.path.join(MODEL_DATA_DIR, "LightGBM", f"{asset_id}_{asset_name}.parquet")
+            df = pd.read_parquet(file_path)
+
+            # 检查必要列是否存在
+            required_cols = ['actual_close', 'predicted_close']
+            if not all(col in df.columns for col in required_cols):
+                raise ValueError(f"Data file missing required columns. Expected: {required_cols}")
+
+            # 生成精确时间序列（关键修复点）-----------------------------
+            # 方法1：根据数据长度自动生成时间序列
+            start_time = pd.Timestamp('2021-06-13 00:00:00')
+            df['datetime'] = pd.date_range(
+                start=start_time,
+                periods=len(df),  # 根据数据行数确定时间点数量
+                freq='1min'
+            )
+
+            # 方法2：验证时间范围是否匹配（可选）
+            expected_end = pd.Timestamp('2022-01-23 23:44:00')
+            actual_end = df['datetime'].iloc[-1]
+            if actual_end != expected_end:
+                st.warning(f"数据时间范围不完整，实际结束时间: {actual_end}")
+
+            return df[['datetime', 'actual_close', 'predicted_close']]
+
+        except Exception as e:
+            st.error(f"Error loading data: {str(e)}")
+            return pd.DataFrame()
 
     # 加载数据
-    data = {}
-    if "LightGBM" in selected_models:
-        lgbm_df = load_data(selected_id, "LightGBM")
-        data["LightGBM"] = lgbm_df
-    if "CatBoost" in selected_models:
-        cat_df = load_data(selected_id, "CatBoost")
-        data["CatBoost"] = cat_df
+    df = load_data(selected_id)
 
-    # 获取时间范围
-    all_dfs = list(data.values())
-    full_df = pd.concat(all_dfs) if all_dfs else pd.DataFrame()
+    if df.empty:
+        st.warning("No data available for the selected cryptocurrency.")
+        return
 
-    if not full_df.empty:
-        # 设置默认时间范围（开始时间后的1个月）
-        default_start = full_df['datetime'].min()
-        default_end = min(default_start + pd.DateOffset(months=1), full_df['datetime'].max())
+    # 时间范围处理（动态获取实际数据的时间范围）
+    data_start = df['datetime'].min().to_pydatetime()
+    data_end = df['datetime'].max().to_pydatetime()
 
-        # 在侧边栏添加日期选择器
-        with st.sidebar:
-            start_date = st.date_input(
-                "Start date",
-                value=default_start.date(),
-                min_value=full_df['datetime'].min().date(),
-                max_value=full_df['datetime'].max().date(),
-                key="start_date_input"  # Unique key
-            )
+    with st.sidebar:
+        # 日期选择器（动态设置最小/最大值）-----------------------------
+        start_date = st.date_input(
+            "Start date",
+            value=data_start.date(),
+            min_value=data_start.date(),
+            max_value=data_end.date(),
+            key="start_date_input"
+        )
 
-            end_date = st.date_input(
-                "End date",
-                value=default_end.date(),
-                min_value=full_df['datetime'].min().date(),
-                max_value=full_df['datetime'].max().date(),
-                key="end_date_input"  # Unique key
-            )
+        end_date = st.date_input(
+            "End date",
+            value=min(data_start + pd.DateOffset(months=1), data_end).date(),
+            min_value=data_start.date(),
+            max_value=data_end.date(),
+            key="end_date_input"
+        )
 
-        # 转换日期为datetime
-        start_datetime = pd.to_datetime(start_date)
-        end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1)  # 包含结束日
+    # 转换日期格式（包含时间部分）
+    start_datetime = pd.to_datetime(start_date).replace(hour=0, minute=0, second=0)
+    end_datetime = pd.to_datetime(end_date).replace(hour=23, minute=59, second=59)
 
-        # 处理每个模型的数据
-        processed_data = {}
-        for model_name, df in data.items():
-            # 筛选时间范围内的数据
-            temp_df = df[(df['datetime'] >= start_datetime) & (df['datetime'] <= end_datetime)].copy()
+    # 筛选时间范围（确保包含边界）
+    filtered_df = df[
+        (df['datetime'] >= start_datetime) &
+        (df['datetime'] <= end_datetime)
+        ].copy()
 
-            # 根据间隔重新采样数据
-            if interval != "1m":
-                interval_map = {
-                    "5m": "5T",
-                    "15m": "15T",
-                    "1h": "1H"
-                }
-                temp_df = temp_df.set_index('datetime').resample(interval_map[interval]).mean().reset_index()
+    # 如果筛选后无数据提示
+    if filtered_df.empty:
+        st.warning("No data available in the selected time range.")
+        return
 
-            processed_data[model_name] = temp_df
+    # 重采样逻辑（保持一致性）-------------------------------------
+    if interval != "1m":
+        resample_rule = {
+            "5m": "5min",
+            "15m": "15min",
+            "1h": "1H"
+        }[interval]
 
-        # --- 使用 Plotly Go 创建交互式图表 ---
+        # 使用mean()聚合，保留两列
+        filtered_df = filtered_df.set_index('datetime').resample(resample_rule).mean().reset_index()
+
+    col1, col2 = st.columns([3, 2])  # 3:2的宽度比例
+
+    with col1:
+        # 绘制预测图表
         fig = go.Figure()
+        # 添加实际价格曲线
+        fig.add_trace(go.Scatter(
+            x=filtered_df['datetime'],
+            y=filtered_df['actual_close'],
+            name='Actual Price',
+            line=dict(color='blue', width=2),
+            opacity=0.8
+        ))
 
-        # 添加实际目标曲线（只添加一次）
-        fig = go.Figure()
-        if processed_data:
-            first_df = list(processed_data.values())[0]
-            target_col = 'target' if 'target' in first_df.columns else 'Target'
-            fig.add_trace(go.Scatter(
-                x=first_df['datetime'],
-                y=first_df[target_col],
-                name='Actual Target',
-                line=dict(color='blue', width=2),
-                opacity=0.8
-            ))
-
-        colors = {'LightGBM': 'red', 'CatBoost': 'green'}
-        for model_name, df in processed_data.items():
-            fig.add_trace(go.Scatter(
-                x=df['datetime'],
-                y=df['final_predictions'] * PREDICTION_MULTIPLIER,  # 关键修改点
-                name=f'{model_name} Predictions (x{PREDICTION_MULTIPLIER})',
-                line=dict(color=colors.get(model_name, 'gray'), width=1.5),
-                opacity=0.7
-            ))
+        # 添加预测价格曲线
+        fig.add_trace(go.Scatter(
+            x=filtered_df['datetime'],
+            y=filtered_df['predicted_close'],
+            name='Predicted Price',
+            line=dict(color='red', width=1.5),
+            opacity=0.7
+        ))
 
         # 更新图表布局
         fig.update_layout(
-            title=f'{asset_mapping[selected_id]} (ID: {selected_id}) - Model Comparison | Interval: {interval}',
+            title=f'{asset_mapping[selected_id]} Price Prediction | Interval: {interval}',
             xaxis_title='Datetime',
-            yaxis_title='Value',
+            yaxis_title='Price (USD)',
             hovermode='x unified',
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
             height=600,
             template='plotly_white'
         )
 
-        # --- 在 Streamlit 中显示 ---
         st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(height=450)  # 调整高度适应侧边显示
 
-        # 添加模型性能指标比较
-        st.subheader("📈 Model Performance Comparison")
+    with col2:
+        # 特征重要性显示
+        st.subheader("🔍 Feature Importance")
+        feature_img_path = os.path.join(
+            FEATURE_IMPORTANCE_DIR,
+            f"{selected_id}_feature_importance.png"
+        )
 
-        if len(processed_data) > 1:
-            metrics = {}
-            for model_name, df in processed_data.items():
-                target_col = 'target' if 'target' in df.columns else 'Target'
-                pred_col = 'final_predictions'
-                if target_col in df.columns and pred_col in df.columns:
-                    adjusted_predictions = df[pred_col] * PREDICTION_MULTIPLIER  # 关键修改点
-                    error = df[target_col] - adjusted_predictions
-                    metrics[model_name] = {
-                        'MAE': round(abs(error).mean(), 6),
-                        'RMSE': round((error ** 2).mean() ** 0.5, 6),
-                        'Correlation': round(df[target_col].corr(adjusted_predictions), 4)
-                    }
-
-            # 显示指标表格
-            metrics_df = pd.DataFrame(metrics).T
-            st.dataframe(metrics_df.style.highlight_min(axis=0, color='lightgreen'))
-
-            # 添加数据统计摘要
-            st.subheader("📊 Data Summary")
-            cols = st.columns(2)
-            with cols[0]:
-                st.metric("Cryptocurrency", asset_mapping[selected_id])
-            with cols[1]:
-                st.metric("Data Interval", interval)
-
-            # # 显示原始数据（可选）
-            # if st.checkbox("Show raw data", key="show_raw_data_checkbox"):  # Unique key
-            #     selected_model = st.radio(
-            #         "Select model to view",
-            #         list(processed_data.keys()),
-            #         key="model_radio"  # Unique key
-            #     )
-            #     st.dataframe(processed_data[selected_model])
-
+        if os.path.exists(feature_img_path):
+            # 添加带边框的容器
+            with st.container(border=True):
+                st.image(feature_img_path,
+                         caption=f'{asset_mapping[selected_id]}',
+                         use_container_width=True,
+                         output_format="PNG")
+                st.caption("Higher values indicate more important features")
         else:
-            st.warning("No data available for the selected models.")
+            st.error("Feature importance visualization not available")
+    # --- 性能指标 ---
+    st.subheader("📈 Model Performance Metrics")
 
+    # 计算指标
+    error = filtered_df['actual_close'] - filtered_df['predicted_close']
+    metrics = {
+        'MAE': round(float(abs(error).mean()), 4),
+        'RMSE': round((error ** 2).mean() ** 0.5, 4),
+        'Correlation': round(filtered_df['actual_close'].corr(filtered_df['predicted_close']), 4),
+        # 'R-squared': round(r2_score(filtered_df['actual_close'], filtered_df['predicted_close']), 4)
+    }
+
+    # 显示指标
+    cols = st.columns(4)
+    metrics_labels = {
+        'MAE': 'Mean Absolute Error',
+        'RMSE': 'Root Mean Squared Error',
+        'Correlation': 'Correlation Coefficient',
+        'R-squared': 'R-squared'
+    }
+
+    for i, (key, value) in enumerate(metrics.items()):
+        cols[i].metric(metrics_labels[key], value)
+
+    # Advanced Analysis
+    with st.expander("Advanced Analysis Options"):
+        tab1, tab2 = st.tabs(["Model Parameters", "Feature List"])
+
+        with tab1:
+            st.json({
+                "objective": "regression",
+                "metric": "rmse",
+                "boosting_type": "gbdt",
+                "num_leaves": 100,
+                "max_depth": -1,
+                "min_data_in_leaf": 500,
+                "learning_rate": 0.01,
+                "subsample": 0.8,
+                "colsample_bytree": 0.8,
+                "reg_alpha": 0.5,
+                "reg_lambda": 0.5,
+                "n_jobs": -1,
+                "random_state": 42,
+                "verbosity": -1,
+                "n_estimators": 1000
+            })
+
+        with tab2:
+            st.write("Used Features:")
+            st.dataframe(pd.DataFrame([
+                'datetime',
+                'timestamp',
+                'Asset_ID',
+                'Count',
+                'Open',
+                'High',
+                'Low',
+                'Close',
+                'Volume',
+                'VWAP',
+                'Target',
+                'Close_now_15',
+                'Volume_now_15',
+                'Close_now_30',
+                'Volume_now_30',
+                'Close_now_60',
+                'Volume_now_60',
+                'Close_now_90',
+                'Volume_now_90',
+                'Close_now_150',
+                'Volume_now_150',
+                'Close_now_600',
+                'Volume_now_600',
+                'Close_now_1500',
+                'Volume_now_1500',
+                'w',
+                'W_Close_now_15'
+            ], columns=["Feature Names"]))
+
+    # 原始数据预览
+    if st.checkbox("Show raw data preview"):
+        st.dataframe(filtered_df.head(10))
 
 def crypto_news_reader():
     st.title("📰 Cryptocurrency News Reader")
