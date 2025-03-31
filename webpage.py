@@ -364,7 +364,7 @@ def model_predictions():
 
         interval = st.selectbox(
             "Data Interval",
-            options=["1m", "5m", "15m", "1h"],
+            options=["15min", "30min", "1h", "4h", "1d"],
             index=0,
             key="interval_selectbox"
         )
@@ -488,11 +488,13 @@ def model_predictions():
         st.warning("No data available in the selected time range.")
         return
 
-    if interval != "1m":
+    if interval != "15min":  # 或者保留原来的 if interval != "1m"
         resample_rule = {
-            "5m": "5min",
-            "15m": "15min",
-            "1h": "1H"
+            "15min": "15min",
+            "30min": "30min",
+            "1h": "1H",
+            "4h": "4H",
+            "1d": "1D"
         }[interval]
 
         # Group by model and resample each separately
