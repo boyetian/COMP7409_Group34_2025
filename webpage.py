@@ -279,38 +279,62 @@ def model_predictions():
     MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
     FEATURE_IMPORTANCE_DIR = os.path.join(MODEL_DATA_DIR, "Feature Importance Pictures")
 
-    # Asset_ID到名称的映射字典 - 分组显示
-    asset_groups = {
-        "Good Predictors": {
-            2: "Bitcoin Cash",
-            5: "EOS.IO",
-            8: "IOTA",
-            9: "Litecoin",
-            11: "Monero",
-            12: "Stellar",
-            13: "TRON"
-        },
-        "Poor Predictors": {
-            0: "Binance Coin",
-            1: "Bitcoin",
-            3: "Cardano",
-            4: "Dogecoin",
-            6: "Ethereum",
-            7: "Ethereum Classic",
-            10: "Maker"
-        }
-    }
+    # Add calculation mode selection
+    calculation_mode = st.sidebar.radio(
+        "Calculation Mode",
+        ["Single Calculation", "Mixed Calculation"],
+        index=0,
+        key="calc_mode_radio"
+    )
 
-    # 创建完整的asset_mapping字典
+    if calculation_mode == "Single Calculation":
+        asset_groups = {
+            "Good Predictors": {
+                2: "Bitcoin Cash",
+                5: "EOS.IO",
+                8: "IOTA",
+                9: "Litecoin",
+                11: "Monero",
+                12: "Stellar",
+                13: "TRON"
+            },
+            "Poor Predictors": {
+                0: "Binance Coin",
+                1: "Bitcoin",
+                3: "Cardano",
+                4: "Dogecoin",
+                6: "Ethereum",
+                7: "Ethereum Classic",
+                10: "Maker"
+            }
+        }
+    elif calculation_mode == "Mixed Calculation":
+        asset_groups = {
+            "Good Predictors": {
+                0: "Binance Coin",
+                1: "Bitcoin",
+                2: "Bitcoin Cash",
+                6: "Ethereum",
+                7: "Ethereum Classic",
+                9: "Litecoin",
+                10: "Maker",
+                11: "Monero"
+            },
+            "Poor Predictors": {
+                3: "Cardano",
+                4: "Dogecoin",
+                5: "EOS.IO",
+                8: "IOTA",
+                12: "Stellar",
+                13: "TRON"
+            }
+        }
+
     asset_mapping = {**asset_groups["Good Predictors"], **asset_groups["Poor Predictors"]}
 
-
-
-    # 侧边栏控件
     with st.sidebar:
         st.header("Model Configuration")
 
-        # 加密货币选择 - 分组显示
         selected_group = st.selectbox(
             "Select Predictor Group",
             options=list(asset_groups.keys()),
@@ -318,7 +342,6 @@ def model_predictions():
             key="group_selectbox"
         )
 
-        # 根据选择的组显示对应的加密货币
         selected_id = st.selectbox(
             "Select Cryptocurrency",
             options=list(asset_groups[selected_group].keys()),
@@ -327,7 +350,16 @@ def model_predictions():
             key="crypto_selectbox"
         )
 
-        # 数据间隔选择
+        if calculation_mode == "Mixed Calculation":
+            selected_models = st.multiselect(
+                "Select Models to Compare",
+                options=['LightGBM', 'CatBoost'],
+                default=['LightGBM'],
+                key="model_multiselect"
+            )
+        else:
+            selected_models = ['LightGBM']
+
         interval = st.selectbox(
             "Data Interval",
             options=["1m", "5m", "15m", "1h"],
@@ -335,60 +367,96 @@ def model_predictions():
             key="interval_selectbox"
         )
 
-        st.markdown("---")
-        st.subheader("Time Range Selection")
-
-    # 修改后的数据加载函数（修复时间序列生成）
     @st.cache_data
-    def load_data(asset_id):
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
-
+    def load_data(asset_id, calculation_mode, selected_models=['LightGBM']):
         try:
-            # 加载Parquet文件
-            asset_name = asset_mapping[asset_id]
-            file_path = os.path.join(MODEL_DATA_DIR, "LightGBM", f"{asset_id}_{asset_name}.parquet")
-            df = pd.read_parquet(file_path)
+            dfs = []
 
-            # 检查必要列是否存在
-            required_cols = ['actual_close', 'predicted_close']
-            if not all(col in df.columns for col in required_cols):
-                raise ValueError(f"Data file missing required columns. Expected: {required_cols}")
+            for model in selected_models:
+                if calculation_mode == "Single Calculation":
+                    asset_name = asset_mapping[asset_id]
+                    file_path = os.path.join(MODEL_DATA_DIR, "LightGBM", f"{asset_id}_{asset_name}.parquet")
+                    df = pd.read_parquet(file_path)
+                    df = df.rename(columns={
+                        'actual_close': 'actual',
+                        'predicted_close': 'predicted'
+                    })
 
-            # 生成精确时间序列（关键修复点）-----------------------------
-            # 方法1：根据数据长度自动生成时间序列
-            start_time = pd.Timestamp('2021-06-13 00:00:00')
-            df['datetime'] = pd.date_range(
-                start=start_time,
-                periods=len(df),  # 根据数据行数确定时间点数量
-                freq='1min'
-            )
+                    # Ensure datetime column exists for single calculation
+                    if 'datetime' not in df.columns:
+                        # If timestamp exists, convert to datetime
+                        if 'timestamp' in df.columns:
+                            df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+                        else:
+                            # If no timestamp, create datetime from index
+                            df = df.reset_index()
+                            if 'datetime' in df.columns:
+                                if not pd.api.types.is_datetime64_any_dtype(df['datetime']):
+                                    df['datetime'] = pd.to_datetime(df['datetime'])
+                            else:
+                                # If no datetime column at all, create a dummy one
+                                df['datetime'] = pd.date_range(start='2021-06-13', periods=len(df), freq='1min')
 
-            # 方法2：验证时间范围是否匹配（可选）
-            expected_end = pd.Timestamp('2022-01-23 23:44:00')
-            actual_end = df['datetime'].iloc[-1]
-            if actual_end != expected_end:
-                st.warning(f"数据时间范围不完整，实际结束时间: {actual_end}")
+                    # Ensure we have the required columns
+                    required_cols = ['datetime', 'actual', 'predicted']
+                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    if missing_cols:
+                        raise ValueError(f"Missing required columns: {missing_cols}")
 
-            return df[['datetime', 'actual_close', 'predicted_close']]
+                    # Sort by datetime
+                    df = df.sort_values('datetime')
+
+                    # Handle potential duplicates
+                    df = df.drop_duplicates(subset=['datetime'], keep='last')
+
+                else:
+                    file_path = os.path.join(MODEL_DATA_DIR, "mixed_calculation", model, f"{asset_id}.parquet")
+                    df = pd.read_parquet(file_path)
+
+                    # Handle datetime conversion for mixed calculation data
+                    if 'datetime' in df.columns:
+                        if not pd.api.types.is_datetime64_any_dtype(df['datetime']):
+                            df['datetime'] = pd.to_datetime(df['datetime'])
+                    else:
+                        # If no datetime column, create one from timestamp
+                        df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+
+                    # Ensure we have the required columns
+                    required_cols = ['datetime', 'actual', 'predicted']
+                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    if missing_cols:
+                        raise ValueError(f"Missing required columns: {missing_cols}")
+
+                    # Sort by datetime
+                    df = df.sort_values('datetime')
+
+                    # Handle potential duplicates
+                    df = df.drop_duplicates(subset=['datetime'], keep='last')
+
+                df['model'] = model
+                dfs.append(df)
+
+            combined_df = pd.concat(dfs)
+            return combined_df[['datetime', 'actual', 'predicted', 'model']]
 
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             return pd.DataFrame()
 
-    # 加载数据
-    df = load_data(selected_id)
+    df = load_data(selected_id, calculation_mode, selected_models)
 
     if df.empty:
         st.warning("No data available for the selected cryptocurrency.")
         return
 
-    # 时间范围处理（动态获取实际数据的时间范围）
+    st.markdown("---")
+    st.subheader("Time Range Selection")
+
+    # Get actual data time range
     data_start = df['datetime'].min().to_pydatetime()
     data_end = df['datetime'].max().to_pydatetime()
 
     with st.sidebar:
-        # 日期选择器（动态设置最小/最大值）-----------------------------
         start_date = st.date_input(
             "Start date",
             value=data_start.date(),
@@ -399,28 +467,24 @@ def model_predictions():
 
         end_date = st.date_input(
             "End date",
-            value=min(data_start + pd.DateOffset(months=1), data_end).date(),
+            value=min(data_start + pd.DateOffset(months=7), data_end).date(),
             min_value=data_start.date(),
             max_value=data_end.date(),
             key="end_date_input"
         )
 
-    # 转换日期格式（包含时间部分）
     start_datetime = pd.to_datetime(start_date).replace(hour=0, minute=0, second=0)
     end_datetime = pd.to_datetime(end_date).replace(hour=23, minute=59, second=59)
 
-    # 筛选时间范围（确保包含边界）
     filtered_df = df[
         (df['datetime'] >= start_datetime) &
         (df['datetime'] <= end_datetime)
         ].copy()
 
-    # 如果筛选后无数据提示
     if filtered_df.empty:
         st.warning("No data available in the selected time range.")
         return
 
-    # 重采样逻辑（保持一致性）-------------------------------------
     if interval != "1m":
         resample_rule = {
             "5m": "5min",
@@ -428,36 +492,58 @@ def model_predictions():
             "1h": "1H"
         }[interval]
 
-        # 使用mean()聚合，保留两列
-        filtered_df = filtered_df.set_index('datetime').resample(resample_rule).mean().reset_index()
+        # Group by model and resample each separately
+        resampled_dfs = []
+        for model in selected_models:
+            model_df = filtered_df[filtered_df['model'] == model].copy()
 
-    # 在图表标题中添加预测质量标签
+            # Set datetime as index for resampling
+            model_df = model_df.set_index('datetime')
+
+            # Resample only numeric columns
+            resampled = model_df[['actual', 'predicted']].resample(resample_rule).mean()
+
+            # Interpolate missing values (optional)
+            resampled = resampled.interpolate(method='time')
+
+            # Add model column back
+            resampled['model'] = model
+
+            # Reset index
+            resampled = resampled.reset_index()
+
+            resampled_dfs.append(resampled)
+
+        filtered_df = pd.concat(resampled_dfs)
+
     prediction_quality = "Good" if selected_id in asset_groups["Good Predictors"] else "Poor"
 
-    col1, col2 = st.columns([3, 2])  # 3:2的宽度比例
+    col1, col2 = st.columns([3, 2])
 
     with col1:
-        # 绘制预测图表
         fig = go.Figure()
-        # 添加实际价格曲线
+
+        # Add actual price (only once)
+        first_model_df = filtered_df[filtered_df['model'] == selected_models[0]]
         fig.add_trace(go.Scatter(
-            x=filtered_df['datetime'],
-            y=filtered_df['actual_close'],
+            x=first_model_df['datetime'],
+            y=first_model_df['actual'],
             name='Actual Price',
             line=dict(color='blue', width=2),
             opacity=0.8
         ))
 
-        # 添加预测价格曲线
-        fig.add_trace(go.Scatter(
-            x=filtered_df['datetime'],
-            y=filtered_df['predicted_close'],
-            name='Predicted Price',
-            line=dict(color='red', width=1.5),
-            opacity=0.7
-        ))
+        model_colors = {'LightGBM': 'red', 'CatBoost': 'green'}
+        for model in selected_models:
+            model_df = filtered_df[filtered_df['model'] == model]
+            fig.add_trace(go.Scatter(
+                x=model_df['datetime'],
+                y=model_df['predicted'],
+                name=f'{model} Predicted',
+                line=dict(color=model_colors.get(model, 'orange'), width=1.5),
+                opacity=0.7
+            ))
 
-        # 更新图表布局 - 添加预测质量标签
         fig.update_layout(
             title=f'{asset_mapping[selected_id]} Price Prediction ({prediction_quality} Predictor) | Interval: {interval}',
             xaxis_title='Datetime',
@@ -467,74 +553,114 @@ def model_predictions():
             height=600,
             template='plotly_white'
         )
-
         st.plotly_chart(fig, use_container_width=True)
-        fig.update_layout(height=450)  # 调整高度适应侧边显示
 
     with col2:
-        # 特征重要性显示
         st.subheader("🔍 Feature Importance")
-        feature_img_path = os.path.join(
-            FEATURE_IMPORTANCE_DIR,
-            f"{selected_id}_feature_importance.png"
-        )
 
-        if os.path.exists(feature_img_path):
-            # 添加带边框的容器
-            with st.container(border=True):
-                st.image(feature_img_path,
-                         caption=f'{asset_mapping[selected_id]}',
-                         use_container_width=True,
-                         output_format="PNG")
-                st.caption("Higher values indicate more important features")
+        if calculation_mode == "Single Calculation":
+            feature_img_path = os.path.join(
+                FEATURE_IMPORTANCE_DIR,
+                f"{selected_id}_feature_importance.png"
+            )
+            if os.path.exists(feature_img_path):
+                with st.container(border=True):
+                    st.image(feature_img_path,
+                             caption=f'{asset_mapping[selected_id]}',
+                             use_container_width=True)
+                    st.caption("Higher values indicate more important features")
+            else:
+                st.error("Feature importance visualization not available")
         else:
-            st.error("Feature importance visualization not available")
-    # --- 性能指标 ---
+            for model in selected_models:
+                feature_img_path = os.path.join(
+                    MODEL_DATA_DIR,
+                    "mixed_calculation",
+                    "feature_importance",
+                    f"{model}.png"
+                )
+                if os.path.exists(feature_img_path):
+                    with st.container(border=True):
+                        st.image(feature_img_path,
+                                 caption=f'{model} Feature Importance',
+                                 use_container_width=True)
+                        st.caption(f"{model} feature importance (applies to all assets)")
+                else:
+                    st.warning(f"No feature importance image found for {model}")
+
     st.subheader("📈 Model Performance Metrics")
+    metrics_data = []
+    for model in selected_models:
+        model_df = filtered_df[filtered_df['model'] == model]
+        error = model_df['actual'] - model_df['predicted']
+        metrics_data.append({
+            'Model': model,
+            'MAE': round(float(abs(error).mean()), 4),
+            'RMSE': round((error ** 2).mean() ** 0.5, 4),
+            'Correlation': round(model_df['actual'].corr(model_df['predicted']), 4),
+            'Data Points': len(model_df)
+        })
 
-    # 计算指标
-    error = filtered_df['actual_close'] - filtered_df['predicted_close']
-    metrics = {
-        'MAE': round(float(abs(error).mean()), 4),
-        'RMSE': round((error ** 2).mean() ** 0.5, 4),
-        'Correlation': round(filtered_df['actual_close'].corr(filtered_df['predicted_close']), 4),
-        # 'R-squared': round(r2_score(filtered_df['actual_close'], filtered_df['predicted_close']), 4)
-    }
+    metrics_df = pd.DataFrame(metrics_data)
+    st.dataframe(metrics_df.set_index('Model'), use_container_width=True)
 
-    # 显示指标
-    cols = st.columns(4)
-    metrics_labels = {
-        'MAE': 'Mean Absolute Error',
-        'RMSE': 'Root Mean Squared Error',
-        'Correlation': 'Correlation Coefficient',
-        'R-squared': 'R-squared'
-    }
-
-    for i, (key, value) in enumerate(metrics.items()):
-        cols[i].metric(metrics_labels[key], value)
-
-    # Advanced Analysis
     with st.expander("Advanced Analysis Options"):
         tab1, tab2 = st.tabs(["Model Parameters", "Feature List"])
 
         with tab1:
-            st.json({
-                "objective": "regression",
-                "metric": "rmse",
-                "boosting_type": "gbdt",
-                "num_leaves": 100,
-                "max_depth": -1,
-                "min_data_in_leaf": 500,
-                "learning_rate": 0.01,
-                "subsample": 0.8,
-                "colsample_bytree": 0.8,
-                "reg_alpha": 0.5,
-                "reg_lambda": 0.5,
-                "n_jobs": -1,
-                "random_state": 42,
-                "verbosity": -1,
-                "n_estimators": 1000
-            })
+            if calculation_mode == "Single Calculation":
+                st.json({
+                    "objective": "regression",
+                    "metric": "rmse",
+                    "boosting_type": "gbdt",
+                    "num_leaves": 100,
+                    "max_depth": -1,
+                    "min_data_in_leaf": 500,
+                    "learning_rate": 0.01,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.5,
+                    "reg_lambda": 0.5,
+                    "n_jobs": -1,
+                    "random_state": 42,
+                    "verbosity": -1,
+                    "n_estimators": 1000
+                })
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.subheader("LightGBM Parameters")
+                    st.json({
+                        'objective': 'regression',
+                        'metric': 'rmse',
+                        'boosting_type': 'gbdt',
+                        'num_leaves': 100,
+                        'max_depth': -1,
+                        'min_data_in_leaf': 500,
+                        'learning_rate': 0.01,
+                        'subsample': 0.8,
+                        'colsample_bytree': 0.8,
+                        'reg_alpha': 0.5,
+                        'reg_lambda': 0.5,
+                        'n_jobs': -1,
+                        'random_state': 42,
+                        'verbosity': -1,
+                        'n_estimators': 1000
+                    })
+                with col2:
+                    st.subheader("CatBoost Parameters")
+                    st.json({
+                        'iterations': 1500,
+                        'learning_rate': 0.03,
+                        'depth': 8,
+                        'l2_leaf_reg': 3,
+                        'random_seed': 42,
+                        'loss_function': 'RMSE',
+                        'eval_metric': 'RMSE',
+                        'early_stopping_rounds': 100,
+                        'task_type': 'CPU',
+                        'verbose': 50
+                    })
 
         with tab2:
             st.write("Used Features:")
@@ -568,9 +694,9 @@ def model_predictions():
                 'W_Close_now_15'
             ], columns=["Feature Names"]))
 
-    # 原始数据预览
     if st.checkbox("Show raw data preview"):
         st.dataframe(filtered_df.head(10))
+
 
 def crypto_news_reader():
     st.title("📰 Cryptocurrency News Reader")
