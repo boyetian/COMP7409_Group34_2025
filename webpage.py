@@ -279,13 +279,6 @@ def model_predictions():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
 
-    # 如果不存在，尝试临时目录
-    if not os.path.exists(MODEL_DATA_DIR):
-        MODEL_DATA_DIR = os.path.join("/tmp", "model_data")
-
-    # 确保目录存在
-    os.makedirs(MODEL_DATA_DIR, exist_ok=True)
-
     FEATURE_IMPORTANCE_DIR = os.path.join(MODEL_DATA_DIR, "Feature Importance Pictures")
 
     # Add calculation mode selection
