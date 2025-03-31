@@ -277,21 +277,15 @@ def model_predictions():
     st.title("🤖 AI Trading Model Comparison")
     # 初始化路径（兼容本地和云端）
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
 
-    # 检测部署环境
-    if os.path.exists('/app'):  # Heroku
-        MODEL_DATA_DIR = '/app/model_data'
-    elif os.path.exists('/tmp'):  # Cloud Run
-        MODEL_DATA_DIR = '/tmp/model_data'
-    else:
-        MODEL_DATA_DIR = os.path.join(BASE_DIR, "model_data")
-
-    # 调试输出
-    st.write(f"当前工作目录: {os.getcwd()}")
-    st.write(f"模型数据目录内容: {os.listdir(MODEL_DATA_DIR) if os.path.exists(MODEL_DATA_DIR) else '目录不存在'}")
+    # 如果不存在，尝试临时目录
+    if not os.path.exists(MODEL_DATA_DIR):
+        MODEL_DATA_DIR = os.path.join("/tmp", "model_data")
 
     # 确保目录存在
     os.makedirs(MODEL_DATA_DIR, exist_ok=True)
+
     FEATURE_IMPORTANCE_DIR = os.path.join(MODEL_DATA_DIR, "Feature Importance Pictures")
 
     # Add calculation mode selection
