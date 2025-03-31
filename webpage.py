@@ -2,108 +2,109 @@ import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime, timedelta, date
 import os
-from datetime import datetime
 import pytz
-from dateutil.relativedelta import relativedelta
+import yfinance as yf
 import requests
 import pandas as pd
-
-def get_binance_klines(symbol='BTCUSDT', interval='1m', start_time=None, end_time=None, limit=1000):
-    """
-    获取 Binance 交易对的历史 K 线数据，支持选择开始和结束时间。
-    参数:
-    - symbol: 交易对（例如 BTCUSDT）
-    - interval: 时间间隔（例如 '1m', '5m', '1h', '1d'）
-    - start_time: 开始时间（字符串，格式为 'YYYY-MM-DD HH:MM:SS' 或 datetime 对象）
-    - end_time: 结束时间（字符串，格式为 'YYYY-MM-DD HH:MM:SS' 或 datetime 对象）
-    - limit: 返回数据的数量限制（最多 1000）
-    """
-    tz = pytz.timezone('Asia/Hong_Kong')
-
-    # 统一处理时间输入
-    def parse_time(time_input, default_delta=None):
-        if time_input is None:
-            # 如果没有提供时间且没有默认偏移，返回当前时间；否则返回当前时间减去偏移
-            return datetime.now(tz) if default_delta is None else datetime.now(tz) - default_delta
-        if isinstance(time_input, (int, float)):
-            # 如果是时间戳，转换为 datetime 并设置时区
-            return datetime.fromtimestamp(time_input / 1000, tz=pytz.utc).astimezone(tz)
-        if isinstance(time_input, str):
-            # 如果是字符串，解析为 datetime 对象
-            time_input = datetime.strptime(time_input, '%Y-%m-%d %H:%M:%S')
-        if time_input.tzinfo is None:
-            # 如果无时区信息，设置为香港时区
-            return tz.localize(time_input)
-        # 如果已有时区，转换为香港时区
-        return time_input.astimezone(tz)
-
-    # 解析时间：若未提供 end_time，默认为当前时间；若未提供 start_time，默认一个月前
-    end_time = parse_time(end_time)
-    start_time = parse_time(start_time, relativedelta(months=1))  # 修改此处为1个月
-
-    # 转换为UTC时间戳（毫秒）
-    start_timestamp = int(start_time.astimezone(pytz.utc).timestamp() * 1000)
-    end_timestamp = int(end_time.astimezone(pytz.utc).timestamp() * 1000)
-
-    # 获取数据
-    url = "https://api.binance.com/api/v3/klines"
-    all_data = []
-    current_start = start_timestamp
-
-    while current_start < end_timestamp:
-        params = {
-            'symbol': symbol,
-            'interval': interval,
-            'startTime': current_start,
-            'endTime': end_timestamp,
-            'limit': limit
-        }
-        response = requests.get(url, params=params)
-        data = response.json()
-
-        # 检查返回的数据格式
-        if not isinstance(data, list):
-            st.error(f"Unexpected data format: {data}")
-            break
-
-        if not data:
-            break
-
-        all_data.extend(data)
-
-        try:
-            current_start = data[-1][6] + 1  # 使用K线结束时间 +1ms 作为下一段起始
-        except (IndexError, KeyError) as e:
-            st.error(f"Error processing data: {e}, data: {data[-1] if data else 'Empty data'}")
-            break
-
-    # 创建DataFrame
-    columns = ['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time',
-               'Quote Asset Volume', 'Number of Trades', 'Taker Buy Base Volume',
-               'Taker Buy Quote Volume', 'Ignore']
-    df = pd.DataFrame(all_data, columns=columns)
-
-    # 处理时间和数值类型
-    df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Hong_Kong')
-    df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Hong_Kong')
-    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'Quote Asset Volume',
-                    'Taker Buy Base Volume', 'Taker Buy Quote Volume']
-    df[numeric_cols] = df[numeric_cols].astype(float)
-
-    return df[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time']]
 
 # ==== Timezone Settings ====
 HK_TZ = pytz.timezone('Asia/Hong_Kong')
 UTC_TZ = pytz.utc
 
 
+# ==== Yahoo Finance Functions ====
+def get_yfinance_data(symbol='BTC-USD', interval='1h', start_date=None, end_date=None):
+    """
+    获取 Yahoo Finance 的历史数据
+    参数:
+    - symbol: 交易对（例如 BTC-USD）
+    - interval: 时间间隔 ('1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo')
+    - start_date: 开始日期 (datetime.date 或 datetime.datetime)
+    - end_date: 结束日期 (datetime.date 或 datetime.datetime)
+    """
+    # 转换时间格式
+    if start_date is None:
+        start_date = datetime.now() - timedelta(days=60)
+    if end_date is None:
+        end_date = datetime.now()
+
+    # 下载数据
+    ticker = yf.Ticker(symbol)
+    data = ticker.history(
+        interval=interval,
+        start=start_date,
+        end=end_date,
+        auto_adjust=False
+    )
+
+    # 处理数据格式
+    if data.empty:
+        return pd.DataFrame()
+
+    data = data.reset_index()
+
+    # Check if the datetime column is named 'Date' or 'Datetime'
+    datetime_col = 'Datetime' if 'Datetime' in data.columns else 'Date'
+
+    # Convert to datetime and handle timezone
+    if pd.api.types.is_datetime64tz_dtype(data[datetime_col]):
+        # Already timezone-aware, just convert to HK time
+        data['Open Time'] = pd.to_datetime(data[datetime_col]).dt.tz_convert('Asia/Hong_Kong')
+    else:
+        # Not timezone-aware, localize to UTC then convert to HK time
+        data['Open Time'] = pd.to_datetime(data[datetime_col]).dt.tz_localize('UTC').dt.tz_convert('Asia/Hong_Kong')
+
+    data['Close Time'] = data['Open Time']
+
+    # 重命名列以匹配原代码
+    data = data.rename(columns={
+        'Open': 'Open',
+        'High': 'High',
+        'Low': 'Low',
+        'Close': 'Close',
+        'Volume': 'Volume'
+    })
+
+    return data[['Open Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close Time']]
+
+
+def fetch_realtime_price(symbol='BTC-USD'):
+    """
+    获取 Yahoo Finance 的实时价格
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period='1d', interval='1m')
+        if data.empty:
+            return None
+
+        latest = data.iloc[-1]
+        return {
+            'price': latest['Close'],
+            'timestamp': datetime.now(HK_TZ)
+        }
+    except Exception as e:
+        st.error(f"Failed to fetch real-time price: {str(e)}")
+        return None
+
+
+# ==== Helper Functions ====
 def convert_date_to_timestamp(date_obj, end_of_day=False):
-    dt = HK_TZ.localize(datetime(
-        date_obj.year, date_obj.month, date_obj.day,
-        hour=23 if end_of_day else 0,
-        minute=59 if end_of_day else 0,
-        second=59 if end_of_day else 0
-    ))
+    """
+    转换日期对象为时间戳
+    """
+    if isinstance(date_obj, datetime):
+        dt = date_obj
+    else:
+        dt = datetime.combine(date_obj, datetime.min.time())
+
+    dt = HK_TZ.localize(dt) if dt.tzinfo is None else dt.astimezone(HK_TZ)
+
+    if end_of_day:
+        dt = dt.replace(hour=23, minute=59, second=59)
+    else:
+        dt = dt.replace(hour=0, minute=0, second=0)
+
     utc_dt = dt.astimezone(UTC_TZ)
     return int(utc_dt.timestamp() * 1000)
 
@@ -119,24 +120,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ==== Real-time Price ====
-BINANCE_API_URL = "https://api.binance.com/api/v3"
-
-@st.cache_data(ttl=10)
-def fetch_realtime_price(symbol='BTCUSDT'):
-    try:
-        response = requests.get(f"{BINANCE_API_URL}/ticker/price", params={'symbol': symbol})
-        response.raise_for_status()
-        data = response.json()
-        return {
-            'price': float(data['price']),
-            'timestamp': datetime.now()
-        }
-    except Exception as e:
-        st.error(f"Failed to fetch real-time price: {str(e)}")
-        st.stop()
-
-
 # ==== Main Function ====
 def realtime_analytics():
     st.title("📈 Crypto Real-time Analytics Dashboard")
@@ -145,12 +128,13 @@ def realtime_analytics():
     with st.sidebar:
         st.header("Control Panel")
         selected_symbol = st.selectbox("Trading Pair", [
-            'BTCUSDT', 'ETHUSDT', 'XRPUSDT',
-            'BNBUSDT', 'SOLUSDT', 'ADAUSDT'
+            'BTC-USD', 'ETH-USD', 'XRP-USD',
+            'BNB-USD', 'SOL-USD', 'ADA-USD'
         ])
 
         selected_interval = st.selectbox("K-line Interval",
-                                         ["1m", "5m", "15m", "1h", "4h", "1d"], index=4)
+                                         ["1m", "5m", "15m", "30m", "60m", "1d"],
+                                         index=4)
 
         current_hk_time = datetime.now(HK_TZ)
         today_date = current_hk_time.date()
@@ -159,24 +143,20 @@ def realtime_analytics():
         with col1:
             start_date = st.date_input("Start Date",
                                        value=current_hk_time - timedelta(days=60),
-                                       min_value=current_hk_time - timedelta(days=8*365),
+                                       min_value=current_hk_time - timedelta(days=8 * 365),
                                        max_value=today_date)
         with col2:
             end_date = st.date_input("End Date",
                                      value=today_date,
-                                     min_value=current_hk_time - timedelta(days=8*365),
+                                     min_value=current_hk_time - timedelta(days=8 * 365),
                                      max_value=today_date)
 
-        start_time = convert_date_to_timestamp(start_date)
-        end_time = convert_date_to_timestamp(end_date, end_of_day=True)
-
     # ==== Data Fetching ====
-    hist_data = get_binance_klines(
+    hist_data = get_yfinance_data(
         symbol=selected_symbol,
         interval=selected_interval,
-        start_time=start_time,
-        end_time=end_time,
-        limit=1000
+        start_date=start_date,
+        end_date=end_date
     )
 
     realtime_data = fetch_realtime_price(symbol=selected_symbol)
@@ -184,113 +164,112 @@ def realtime_analytics():
     # ==== Real-time Metrics ====
     with st.container():
         col1, col2, col3 = st.columns(3)
-        if len(hist_data) >= 2:
-            delta = hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[-2]
-            delta_pct = (delta / hist_data['Close'].iloc[-2]) * 100
+        if len(hist_data) >= 2 and realtime_data:
+            delta = realtime_data['price'] - hist_data['Close'].iloc[-1]
+            delta_pct = (delta / hist_data['Close'].iloc[-1]) * 100
         else:
             delta = 0
             delta_pct = 0
+
         with col1:
-            st.metric("Current Price", f"${realtime_data['price']:,.2f}", f"{delta:+.2f} ({delta_pct:+.2f}%)")
+            st.metric("Current Price",
+                      f"${realtime_data['price']:,.2f}" if realtime_data else "N/A",
+                      f"{delta:+.2f} ({delta_pct:+.2f}%)")
         with col2:
-            st.metric("Recent High", f"${hist_data['Close'].max():,.2f}")
+            st.metric("Recent High", f"${hist_data['Close'].max():,.2f}" if not hist_data.empty else "N/A")
         with col3:
-            st.metric("Recent Low", f"${hist_data['Close'].min():,.2f}")
+            st.metric("Recent Low", f"${hist_data['Close'].min():,.2f}" if not hist_data.empty else "N/A")
 
     st.markdown("---")
 
     # ==== Price & Volume Chart ====
-    fig = go.Figure()
+    if not hist_data.empty and realtime_data:
+        fig = go.Figure()
 
-    # Price Line
-    fig.add_trace(go.Scatter(
-        x=hist_data['Close Time'],
-        y=hist_data['Close'].round(2),
-        name='Price',
-        line=dict(color='#1f77b4', width=2),
-        yaxis='y2',
-        showlegend = False
-    ))
+        # Price Line
+        fig.add_trace(go.Scatter(
+            x=hist_data['Close Time'],
+            y=hist_data['Close'].round(2),
+            name='Price',
+            line=dict(color='#1f77b4', width=2),
+            yaxis='y2',
+            showlegend=False
+        ))
 
-    # Volume Bar
-    fig.add_trace(go.Bar(
-        x=hist_data['Close Time'],
-        y=hist_data['Volume'],
-        name='Volume',
-        marker={'color' : '#19D3F3', 'line_width':0.15},
-        yaxis='y',
-        showlegend = False
-    ))
+        # Volume Bar
+        fig.add_trace(go.Bar(
+            x=hist_data['Close Time'],
+            y=hist_data['Volume'],
+            name='Volume',
+            marker={'color': '#19D3F3', 'line_width': 0.15},
+            yaxis='y',
+            showlegend=False
+        ))
 
-    # Real-time Price Point
-    fig.add_trace(go.Scatter(
-        x=[realtime_data['timestamp']],
-        y=[realtime_data['price']],
-        mode='markers+text',
-        text=["Live Price"],
-        textposition="top center",
-        marker=dict(color='red', size=10),
-        name='Live Price',
-        yaxis='y2'
-    ))
+        # Real-time Price Point
+        fig.add_trace(go.Scatter(
+            x=[realtime_data['timestamp']],
+            y=[realtime_data['price']],
+            mode='markers+text',
+            text=["Live Price"],
+            textposition="top center",
+            marker=dict(color='red', size=10),
+            name='Live Price',
+            yaxis='y2'
+        ))
 
-    # Layout
-    fig.update_layout(
-        title={
-            'text': f"{selected_symbol} Price & Volume Analysis",
-            'x': 0.5, 'xanchor': 'center', 'font': dict(size=20)
-        },
-        xaxis=dict(autorange=True,
-                   title_text="Date",
-                   rangeslider=dict(visible=True),
-                   showgrid=True,
-                   type="date"
-                   ),
-        yaxis=dict(
-            anchor="x",
-            autorange=True,
-            domain=[0, 0.3],
-            # linecolor="#607d8b",
-            mirror=True,
-            showline=True,
-            side="left",
-            # tickfont={"color": "#607d8b"},
-            tickmode="auto",
-            ticks="",
-            title="Volume",
-            # titlefont={"color": "#607d8b"},
-            type="linear",
-            zeroline=False,
-        ),
-        yaxis2=dict(
-            anchor="x",
-            autorange=True,
-            domain=[0.3, 1],
-            # linecolor="#6600FF",
-            mirror=True,
-            showline=True,
-            side="left",
-            tickfont={"color": "#6600FF"},
-            tickmode="auto",
-            ticks="",
-            title="Price",
-            titlefont={"color": "#6600FF"},
-            type="linear",
-            zeroline=False,
-            fixedrange=False
-        ),
-        hovermode="x unified",
-        height=600,  # 增加整体图表高度
-        margin=dict(t=40, b=20, l=40, r=40),  # 减少上下边距
-        template="plotly_white"
-    )
+        # Layout
+        fig.update_layout(
+            title={
+                'text': f"{selected_symbol} Price & Volume Analysis",
+                'x': 0.5, 'xanchor': 'center', 'font': dict(size=20)
+            },
+            xaxis=dict(
+                autorange=True,
+                title_text="Date",
+                rangeslider=dict(visible=True),
+                showgrid=True,
+                type="date"
+            ),
+            yaxis=dict(
+                anchor="x",
+                autorange=True,
+                domain=[0, 0.3],
+                mirror=True,
+                showline=True,
+                side="left",
+                tickmode="auto",
+                ticks="",
+                title="Volume",
+                type="linear",
+                zeroline=False,
+            ),
+            yaxis2=dict(
+                anchor="x",
+                autorange=True,
+                domain=[0.3, 1],
+                mirror=True,
+                showline=True,
+                side="left",
+                tickfont={"color": "#6600FF"},
+                title="Price",
+                titlefont={"color": "#6600FF"},
+                type="linear",
+                zeroline=False
+            ),
+            hovermode="x unified",
+            height=600,
+            margin=dict(t=40, b=20, l=40, r=40),
+            template="plotly_white"
+        )
 
-    st.plotly_chart(fig, use_container_width=True)
-
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("No data available for the selected time range")
 
     # ==== Footer ====
-    st.caption("Data Source: Binance Public API.")
-    st.caption("Chart refresh rate: Every 60 seconds.")
+    st.caption("Data Source: Yahoo Finance")
+    st.caption("Chart refresh rate: Every 60 seconds")
 
 
 def model_predictions():
